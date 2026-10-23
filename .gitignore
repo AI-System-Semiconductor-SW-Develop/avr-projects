@@ -1,0 +1,21 @@
+# Build outputs
+**/Debug/
+**/Release/
+**/build/
+*.o
+*.d
+*.elf
+*.hex
+*.eep
+*.lss
+*.map
+*.srec
+
+# Local IDE settings and backups
+.vs/
+*.suo
+*.user
+*.atsuo
+*.bak
+~$*
+.rc-car-review/
