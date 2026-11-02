@@ -202,7 +202,7 @@ double calculation (char *folmualr)
 				value =0;
 				take_num=0;
 			}
-			if (!op_empty(&op_stack)&& op_peep(&op_stack) != '(')
+			while (!op_empty(&op_stack)&& op_peep(&op_stack) != '(')
 			{
 				num_push(&num_stack,one_cal(&num_stack,&op_stack)); //계산한 결과 숫자 스택에 넣기
 			}
