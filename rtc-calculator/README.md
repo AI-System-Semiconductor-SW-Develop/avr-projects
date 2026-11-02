@@ -7,6 +7,7 @@ DS1307 RTC의 시간·날짜를 LCD1602에 표시하고, 버튼과 4×4 키패�
 - **개발 환경:** Atmel Studio 7, AVR GCC
 - **팀원:** 김선호, 곽혜민
 - **발표자료:** [RTC/LCD/계산기 통합 시스템 구현](docs/presentation.pptx)
+- **동작영상** [RTC/LCD/계산기 통합 시스템 동작영상](assets/rtc-calculator동작영상.mp4)
 - **전체 프로젝트 목록:** [AVR Projects](../README.md)
 
 ## 주요 기능

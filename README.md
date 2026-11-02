@@ -4,8 +4,8 @@ ATmega128A를 활용해 센서·모터 제어와 RTC·LCD·키패드 연동을 �
 
 | 프로젝트 | 주요 내용 | 자료 |
 | --- | --- | --- |
-| 초음파 장애물 회피 RC카 | Bluetooth 수동 조종, 초음파 센서 3개 기반 자동 주행, FND 주행 기록 표시 | [프로젝트 설명](auto-car/README.md) · [소스](auto-car/firmware) · [발표자료](auto-car/docs/presentation.pptx) |
-| RTC·LCD 계산기 | DS1307 시계·날짜 표시 및 설정, LCD1602 4비트 제어, 키패드와 스택 기반 계산 | [프로젝트 설명](rtc-calculator/README.md) · [소스](rtc-calculator/firmware) · [발표자료](rtc-calculator/docs/presentation.pptx) |
+| 초음파 장애물 회피 RC카 | Bluetooth 수동 조종, 초음파 센서 3개 기반 자동 주행, FND 주행 기록 표시 | [프로젝트 설명](auto-car/README.md) · [소스](auto-car/firmware) · [발표자료](auto-car/docs/presentation.pptx) · [동작영상](auto-car/assets/auto_car_driving_mode.mp4) |
+| RTC·LCD 계산기 | DS1307 시계·날짜 표시 및 설정, LCD1602 4비트 제어, 키패드와 스택 기반 계산 | [프로젝트 설명](rtc-calculator/README.md) · [소스](rtc-calculator/firmware) · [발표자료](rtc-calculator/docs/presentation.pptx) · [동작영상](rtc-calculator/assets/rtc-calculator동작영상.mp4) |
 
 ## 기술 구성
 
@@ -26,7 +26,9 @@ avr-projects/
 ├── auto-car/
 │   ├── README.md
 │   ├── firmware/       # C 소스·헤더 및 Atmel Studio 프로젝트
+│   ├── assets/ 
 │   └── docs/presentation.pptx
+|
 └── rtc-calculator/
     ├── README.md
     ├── firmware/

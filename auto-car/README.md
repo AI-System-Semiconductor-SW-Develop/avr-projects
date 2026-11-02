@@ -7,6 +7,7 @@ Bluetooth 명령으로 수동 조종하거나, 전방·좌·우 초음파 센서
 - **개발 환경:** Atmel Studio 7, AVR GCC
 - **팀원:** 고지현, 곽혜민
 - **발표자료:** [AVR 기반 초음파 자율주행 RC카](docs/presentation.pptx)
+- **동작영상** [AVR 기반 초음파 자율주행 RC카](assets/auto_car_bluetooth_mode.mp4)
 - **전체 프로젝트 목록:** [AVR Projects](../README.md)
 
 ## 주요 기능
