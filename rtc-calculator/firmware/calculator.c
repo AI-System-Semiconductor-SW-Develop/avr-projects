@@ -3,246 +3,237 @@
  *
  * Created: 2026-07-01 오전 9:42:11
  *  Author: kccistc
- */ 
+ *
+ * 숫자 스택과 연산자 스택 두 개로 중위식을 바로 계산한다.
+ * 수정 사항
+ *  - 숫자 누적 변수: int(AVR에서 16비트, 최대 32767) → int32_t, 8자리 이상은 범위 오류
+ *  - 잘못된 수식, 괄호 불일치, 0으로 나누기, 스택 초과를 오류 코드로 돌려준다
+ *    (이전에는 빈 스택에서 0을 꺼내 엉뚱한 값을 결과로 표시했다)
+ *  - 단항 마이너스 지원: -3+5, 2*-3, -(2+3), 1--2
+ */
 
 #include "calculator.h"
+#include <math.h>
 
-void init_opstack (opstack *check)
+#define CALC_NUM_MAX	9999999L	/* 7자리까지: AVR double(32비트 float)은 약 1677만까지 정수를 정확히 표현 */
+#define CALC_RESULT_MAX	1.0e30		/* AVR double(32비트 float) 최대 약 3.4e38 */
+
+/* ---------- 연산자 스택 ---------- */
+
+static void init_opstack(opstack *s)	{ s->top = -1; }
+static int  op_empty(const opstack *s)	{ return s->top < 0; }
+
+static int op_push(opstack *s, char item)
 {
-	check -> top=-1;
+	if (s->top >= STACK_SIZE - 1)
+		return -1;
+	s->op_data[++s->top] = item;
+	return 0;
 }
 
-int op_empty (opstack *check)
+static char op_pop(opstack *s)
 {
-	return (check->top == -1);
+	return op_empty(s) ? 0 : s->op_data[s->top--];
 }
 
-int op_full (opstack *check)
+static char op_peek(const opstack *s)
 {
-	return (check->top == (STACK_SIZE -1));
-	
+	return op_empty(s) ? 0 : s->op_data[s->top];
 }
 
-void op_push (opstack *check , char item)
+/* ---------- 숫자 스택 ---------- */
+
+static void init_numstack(numstack *s)	{ s->top = -1; }
+static int  num_count(const numstack *s)	{ return s->top + 1; }
+
+static int num_push(numstack *s, double item)
 {
-	if (op_full(check))
-	{
-		return;
-	}
-	else 
-	{
-		check -> top++;
-		check ->op_data[check->top] = item;
-	}
+	if (s->top >= STACK_SIZE - 1)
+		return -1;
+	s->num_data[++s->top] = item;
+	return 0;
 }
 
-char op_pop (opstack *check)
+static double num_pop(numstack *s)
 {
-	if (op_empty(check))
-	{
-		return 0;
-	}
-	else
-	{
-		char item = check ->op_data[check->top];
-		check -> top--;
-		
-		return item;
-	}
+	return (s->top < 0) ? 0 : s->num_data[s->top--];
 }
 
-char op_peep (opstack *check)
-{
-	if(op_empty(check))
-	{
-		return 0;
-	}
-	else
-	{
-		char item = check ->op_data[check->top];
-		return item;
-	}
-}
+/* ---------- 계산 ---------- */
 
-void init_numstack (numstack *check)
+static int priority(char op)
 {
-	check -> top=-1;
-}
-
-int num_empty (numstack *check)
-{
-	return check->top == -1;
-}
-
-int num_full (numstack *check)
-{
-	return check->top == (STACK_SIZE -1);
-	
-}
-
-void num_push (numstack *check , double item)
-{
-	if (num_full(check))
+	switch (op)
 	{
-		return;
-	}
-	else
-	{
-		check -> top++;
-		check ->num_data[check->top] = item;
-	}
-}
-
-double num_pop (numstack *check)
-{
-	if (num_empty(check))
-	{
-		return 0;
-	}
-	else
-	{
-		double item = check ->num_data[check->top];
-		check -> top--;
-		
-		return item;
-	}
-}
-
-double num_peep (numstack *check)
-{
-	if(num_empty(check))
-	{
-		return 0;
-	}
-	else
-	{
-		double item = check ->num_data[check->top];
-		return item;
-	}
-}
-
-int priority (char op)
-{
-	switch(op)
-	{
-		case '(': 
-			return 0;
-		case '+': 
-			return 1;
-		case '-': 
-			return 1;
-		case '*': 
-			return 2;
-		case '/': 
-			return 2;
+	case '(':           return 0;	/* 가장 낮게: 괄호 안에서 바깥 연산자를 먼저 꺼내지 않음 */
+	case '+': case '-': return 1;
+	case '*': case '/': return 2;
 	}
 	return -1;
 }
 
-double one_cal ( numstack *num_stack , opstack *op_stack)
+/* 연산자 하나를 꺼내 숫자 두 개로 계산하고 결과를 다시 넣는다 */
+static calc_status_t reduce_once(numstack *nums, opstack *ops)
 {
-	double b= num_pop(num_stack);
-	double a= num_pop(num_stack);
-	double result=0;
-	
-	switch(op_pop(op_stack))
+	if (num_count(nums) < 2 || op_empty(ops))
+		return CALC_ERR_SYNTAX;
+
+	double b = num_pop(nums);
+	double a = num_pop(nums);
+	double result;
+
+	switch (op_pop(ops))
 	{
-		case '+':
-			result = a+b;
-			break;
-		case '-':
-			result = a-b;
-			break;
-		case '*':
-			result = a*b;
-			break;
-		case '/':
-			result = a/b;
-			break;
+	case '+': result = a + b; break;
+	case '-': result = a - b; break;
+	case '*': result = a * b; break;
+	case '/':
+		if (b == 0)
+			return CALC_ERR_DIV0;
+		result = a / b;
+		break;
+	default:
+		return CALC_ERR_SYNTAX;		/* '('가 남아 있는 경우 등 */
 	}
-	return result;
+
+	if (isnan(result) || isinf(result) || fabs(result) > CALC_RESULT_MAX)
+		return CALC_ERR_RANGE;
+
+	num_push(nums, result);			/* 방금 두 개를 꺼냈으므로 공간이 있음 */
+	return CALC_OK;
 }
 
-
-double calculation (char *folmualr)
+calc_status_t calculation(const char *formula, double *out)
 {
-	opstack  op_stack;
-	numstack  num_stack;
-	
-	int value = 0;
-	uint8_t take_num = 0;
-	
-	init_numstack(&num_stack);
-	init_opstack(&op_stack);
-	
-	for ( int i = 0; folmualr[i] != '\0'; i++)
-	{	
-		char key = folmualr[i];
-		
-		//숫자이면 value에 자릿수 계산해서 넣기
-		while ( key >= '0' && key <='9')
+	opstack ops;
+	numstack nums;
+	calc_status_t status;
+
+	int32_t value = 0;
+	uint8_t take_num = 0;		/* 숫자를 누적하는 중 */
+	uint8_t negative = 0;		/* 단항 마이너스가 붙은 상태 */
+	uint8_t expect_operand = 1;	/* 1: 숫자나 '('가 와야 함, 0: 연산자나 ')'가 와야 함 */
+	uint8_t paren_depth = 0;
+
+	init_opstack(&ops);
+	init_numstack(&nums);
+
+	for (uint8_t i = 0; formula[i] != '\0'; i++)
+	{
+		char key = formula[i];
+
+		/* 숫자: 자릿수 누적 */
+		if (key >= '0' && key <= '9')
 		{
+			if (!expect_operand && !take_num)		/* ")3" */
+				return CALC_ERR_SYNTAX;
+			if (value > (CALC_NUM_MAX - (key - '0')) / 10)
+				return CALC_ERR_RANGE;
 			value = value * 10 + (key - '0');
-			take_num =1; // 숫자 가져오는 중
-			break;
+			take_num = 1;
+			continue;
 		}
-		
-		// 여는 괄호가 나오면 연산 스택에 넣기
-		if (key == '(')
+
+		if (key == ' ')			/* 키패드의 빈 칸 키는 무시 */
+			continue;
+
+		/* 숫자가 끝났으면 숫자 스택에 넣는다 */
+		if (take_num)
 		{
-			op_push(&op_stack,key);
-		}
-		
-		// 여는 괄호가 나올 때 까지 괄호 안 계산
-		else if (key == ')')
-		{
-			if (take_num == 1) //숫자를 쓰는 중이었으면 숫자 스택에 넣기
-			{
-				num_push(&num_stack, value); 
-				value =0;
-				take_num=0;
-			}
-			while (!op_empty(&op_stack)&& op_peep(&op_stack) != '(')
-			{
-				num_push(&num_stack,one_cal(&num_stack,&op_stack)); //계산한 결과 숫자 스택에 넣기
-			}
-			if (!op_empty(&op_stack)&& op_peep(&op_stack) == '(')
-			{
-				op_pop(&op_stack); // 여는 괄호 버리기
-			}
-		}
-		
-		// 연산자 
-		else if (key=='+' || key=='-' || key == '*' || key == '/')
-		{
-			if (take_num == 1)
-			{
-				num_push(&num_stack,value);
-				value = 0;
-				take_num = 0;
-			}
-			
-			while (!op_empty(&op_stack) && priority(op_peep(&op_stack)) >= priority(key)) // 우선순위 비교해서 스택에 든 연산자가 높으면 먼저 계산
-			{
-				num_push(&num_stack,one_cal(&num_stack,&op_stack)); //계산한 결과 숫자 스택에 넣기
-			}
-			op_push(&op_stack,key); // 남은 연산자 스택에 넣기
-		}
-	}
-		
-		// 남은 연산 전부 게산해서 결과값 리턴
-		
-		if (take_num == 1)
-		{
-			num_push(&num_stack,value);
+			if (num_push(&nums, negative ? -(double)value : (double)value) < 0)
+				return CALC_ERR_RANGE;
 			value = 0;
 			take_num = 0;
+			negative = 0;
+			expect_operand = 0;
 		}
-				
-		while (!op_empty(&op_stack))
+
+		if (key == '(')
 		{
-			num_push(&num_stack,one_cal(&num_stack,&op_stack)); //계산한 결과 숫자 스택에 넣기
+			if (!expect_operand)					/* "2(3)", ")(" */
+				return CALC_ERR_SYNTAX;
+			if (negative)							/* -(...) = -1 * (...) */
+			{
+				if (num_push(&nums, -1) < 0 || op_push(&ops, '*') < 0)
+					return CALC_ERR_RANGE;
+				negative = 0;
+			}
+			if (op_push(&ops, '(') < 0)
+				return CALC_ERR_RANGE;
+			paren_depth++;
 		}
-		 return num_pop(&num_stack); // 결과 값 리턴
+		else if (key == ')')
+		{
+			if (expect_operand)					/* "()", "(2+)" */
+				return CALC_ERR_SYNTAX;
+			if (paren_depth == 0)					/* 여는 괄호 없음 */
+				return CALC_ERR_PAREN;
+			/* 여는 괄호가 나올 때까지 반복 계산 */
+			while (op_peek(&ops) != '(')
+				if ((status = reduce_once(&nums, &ops)) != CALC_OK)
+					return status;
+			op_pop(&ops);							/* 여는 괄호 버리기 */
+			paren_depth--;
+		}
+		else if (key == '+' || key == '-' || key == '*' || key == '/')
+		{
+			if (expect_operand)
+			{
+				if (key == '-' && !negative)		/* 단항 마이너스 */
+				{
+					negative = 1;
+					continue;
+				}
+				return CALC_ERR_SYNTAX;			/* "*3", "2+*3", "1---2" */
+			}
+			/* 스택 위 연산자의 우선순위가 같거나 높으면 먼저 계산 (왼쪽 결합) */
+			while (!op_empty(&ops) && priority(op_peek(&ops)) >= priority(key))
+				if ((status = reduce_once(&nums, &ops)) != CALC_OK)
+					return status;
+			if (op_push(&ops, key) < 0)
+				return CALC_ERR_RANGE;
+			expect_operand = 1;
+		}
+		else
+		{
+			return CALC_ERR_SYNTAX;				/* 알 수 없는 문자 */
+		}
+	}
+
+	/* 마지막 숫자 */
+	if (take_num)
+	{
+		if (num_push(&nums, negative ? -(double)value : (double)value) < 0)
+			return CALC_ERR_RANGE;
+		expect_operand = 0;
+	}
+
+	if (expect_operand)							/* 빈 수식, 연산자로 끝남, "-" */
+		return CALC_ERR_SYNTAX;
+	if (paren_depth != 0)						/* 닫히지 않은 괄호 */
+		return CALC_ERR_PAREN;
+
+	/* 남은 연산 모두 계산 */
+	while (!op_empty(&ops))
+		if ((status = reduce_once(&nums, &ops)) != CALC_OK)
+			return status;
+
+	if (num_count(&nums) != 1)
+		return CALC_ERR_SYNTAX;
+
+	*out = num_pop(&nums);
+	return CALC_OK;
 }
 
+/* LCD 1행(16자)에 들어가는 오류 문구 */
+const char *calc_error_message(calc_status_t status)
+{
+	switch (status)
+	{
+	case CALC_ERR_SYNTAX: return "Error: syntax";
+	case CALC_ERR_PAREN:  return "Error: ( )";
+	case CALC_ERR_DIV0:   return "Error: div by 0";
+	case CALC_ERR_RANGE:  return "Error: range";
+	default:              return "";
+	}
+}

@@ -9,17 +9,54 @@
 
 #include "uart0.h"
 
-volatile uint8_t bt_data;
+/*
+ * 블루투스 수신 링 버퍼 (USART1 RX ISR → 메인 루프)
+ *  - 변수 1바이트만 쓰면 메인이 처리하기 전에 다음 명령이 앞 명령을 덮고,
+ *    "읽기 → 0으로 초기화" 사이에 들어온 명령도 지워진다. S/E처럼 놓치면 안 되는 명령이 있어 큐로 받는다.
+ *  - head는 ISR만, tail은 메인만 갱신한다(생산자 1·소비자 1). 인덱스가 8비트라 읽기·쓰기가 원자적이다.
+ *  - ISR에서는 UART0 에코(송신 완료 대기)를 하지 않는다. 확인용 에코는 메인 루프에서 한다.
+ */
+#define BT_RX_SIZE  16U                 // 2의 거듭제곱
+#define BT_RX_MASK  (BT_RX_SIZE - 1U)
 
+static volatile uint8_t bt_rx_buf[BT_RX_SIZE];
+static volatile uint8_t bt_rx_head = 0; // ISR이 씀
+static volatile uint8_t bt_rx_tail = 0; // 메인이 씀
+volatile uint8_t bt_rx_overflow = 0;
 
 // P278 표12-3
 // BT로부터 1byte가 들어 오면 자동적으로 이곳으로 진입 한다.
 ISR(USART1_RX_vect)
 {
+	uint8_t data = UDR1;                // UDR1을 읽으면 수신 버퍼가 비워진다
+	uint8_t next = (bt_rx_head + 1U) & BT_RX_MASK;
 
-	bt_data = UDR1;  // UDR1의 내용이 data에 복사된후 UDR1의 내용은 빈 상태로 된다.
-	UART0_transmit(bt_data);   // BT로 부터 들어온 byte를 확인 하기 위해서 comport로 출력 한다. 
+	if (next == bt_rx_tail)             // 가득 참: 새 바이트 버림, 사실은 기록
+	{
+		bt_rx_overflow = 1;
+		return;
+	}
+	bt_rx_buf[bt_rx_head] = data;
+	bt_rx_head = next;
+}
 
+/* 쌓인 수신 데이터를 모두 버린다 (모드 전환 시, 메인 루프 전용) */
+void bt_flush(void)
+{
+	bt_rx_tail = bt_rx_head;
+}
+
+/* 수신된 바이트를 하나 꺼낸다. 비어 있으면 0을 반환 (메인 루프 전용) */
+uint8_t bt_read(void)
+{
+	uint8_t data;
+
+	if (bt_rx_tail == bt_rx_head)
+		return 0;
+
+	data = bt_rx_buf[bt_rx_tail];
+	bt_rx_tail = (bt_rx_tail + 1U) & BT_RX_MASK;
+	return data;
 }
 /*
 1. 전송속도 : 9600bps

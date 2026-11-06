@@ -7,6 +7,9 @@
 
 #include "lcd.h"
 #include "button.h"
+#include "calculator.h"
+#include <util/atomic.h>
+#include <math.h>
 
 void init_lcd(void);
 void lcd_purse_enable(void);
@@ -18,7 +21,6 @@ void lcd_string(char *str);
 void lcd_goto_xy(uint8_t row , uint8_t col);
 
 extern uint8_t get_button (int button_num, int button_pin);
-extern double calculation (char *folmualr);
 
 extern volatile uint32_t keypad_counter;
 extern volatile uint8_t key_data;
@@ -44,8 +46,10 @@ void init_lcd(void) {
 	
 	_delay_ms(15); // 초기 구동 시간
 	
-	// 0x03을 3번 보내는 이유 현재 하드웨어가 8bit인지 4bit인지, 명령을 어디까지 읽었는지 모르기떄문에
-	// 무조건 8bit상태로 리셋시키기 위해 0x30을 3번 보낸다.(왜 3번이나 해야되는지는 모름 걍 doc이 시켰음)
+	// HD44780 instruction 초기화 (데이터시트 초기화 순서)
+	// 전원 직후 LCD가 8비트 모드인지, 4비트 모드에서 상위 니블만 받은 상태인지 알 수 없다.
+	// 0x30(8비트 설정)을 세 번 보내면 어느 상태에서 시작해도 8비트 모드로 맞춰지고,
+	// 그 뒤 0x20 한 니블로 4비트 모드에 들어간다.
 	lcd_cmd_exe_4bit_once(0x30); // 8bit로 초기화
 	_delay_us(4100);
 	lcd_cmd_exe_4bit_once(0x30);
@@ -101,121 +105,175 @@ void lcd_clear(void) {
 	_delay_ms(2);
 }
 
+/*
+ * ---------- 계산기 키 입력 큐 ----------
+ * 키패드 ISR(20ms 주기)은 key_data를 매번 덮어쓴다. 메인이 LCD를 다시 그리거나 부저를 울리는 동안
+ * (수십~수백 ms) 눌린 키는 key_data에서 사라지므로, 계산기 모드에서는 ISR이 큐에 넣고 메인이 꺼낸다.
+ * head는 ISR만, tail은 메인만 갱신한다(생산자 1·소비자 1, 8비트 인덱스).
+ */
+#define CALC_KEY_Q_SIZE	8U
+#define CALC_KEY_Q_MASK	(CALC_KEY_Q_SIZE - 1U)
+
+static volatile uint8_t calc_key_q[CALC_KEY_Q_SIZE];
+static volatile uint8_t calc_key_head = 0;
+static volatile uint8_t calc_key_tail = 0;
+
+void calc_key_push(uint8_t key)		/* TIMER0 ISR 전용 */
+{
+	uint8_t next = (calc_key_head + 1U) & CALC_KEY_Q_MASK;
+	if (next == calc_key_tail)			/* 가득 참: 새 키 버림 */
+		return;
+	calc_key_q[calc_key_head] = key;
+	calc_key_head = next;
+}
+
+static uint8_t calc_key_pop(void)		/* 메인 전용, 비어 있으면 0 */
+{
+	uint8_t key;
+	if (calc_key_tail == calc_key_head)
+		return 0;
+	key = calc_key_q[calc_key_tail];
+	calc_key_tail = (calc_key_tail + 1U) & CALC_KEY_Q_MASK;
+	return key;
+}
+
+static void calc_key_flush(void)
+{
+	calc_key_tail = calc_key_head;
+}
+
+/* ---------- 수식 입력 화면 ---------- */
+
+/* 수식을 처음부터 다시 그린다: 1행 0~15번째, 2행 16~31번째 문자, 커서는 다음 입력 위치 */
+static void calc_redraw(const char *str, uint8_t len)
+{
+	lcd_clear();
+	for (uint8_t i = 0; i < len; i++)
+	{
+		if (i == 16)
+			lcd_goto_xy(1, 0);
+		lcd_display_data(str[i]);
+	}
+	if (len < 16)
+		lcd_goto_xy(0, len);
+	else if (len < CALC_MAX_LEN)
+		lcd_goto_xy(1, len - 16);
+}
+
+/* 한 글자 추가: 길이 제한 검사, 16번째 다음 글자는 2행으로 이동 */
+static void calc_append(char *str, uint8_t *len, char c)
+{
+	if (*len >= CALC_MAX_LEN)			/* 버퍼·화면이 가득 참: 무시 */
+		return;
+	if (*len == 16)
+		lcd_goto_xy(1, 0);
+	str[(*len)++] = c;
+	str[*len] = '\0';
+	lcd_display_data(c);
+}
+
+/* 결과 또는 오류 문구를 1행에 표시 */
+static void calc_show_result(const char *str)
+{
+	char text[17];
+	double value;
+	calc_status_t status = calculation(str, &value);
+
+	if (status != CALC_OK)
+	{
+		lcd_clear();
+		lcd_goto_xy(0, 0);
+		lcd_string((char *)calc_error_message(status));
+		return;
+	}
+
+	/* 소수 둘째 자리까지, 큰 수는 지수 표기로 16자 안에 맞춘다 */
+	if (fabs(value) < 1.0e7)
+		dtostrf(value, 0, 2, text);		/* 최대 "-9999999.99" (11자) */
+	else
+		dtostre(value, text, 4, 0);		/* 예: "-1.2346e+12" (11자) */
+
+	lcd_clear();
+	lcd_goto_xy(0, 0);
+	lcd_string(text);
+}
+
 uint8_t lcd_cal (void)
 {
-	char str[50];
-	int str_len = 0;
-	uint8_t last_key = 0;
-	char result[32];
-	
+	char str[CALC_MAX_LEN + 1] = "";	/* LCD 두 줄(32자) + '\0' */
+	uint8_t str_len = 0;
+	uint8_t showing_result = 0;			/* '=' 직후: 다음 입력은 새 수식으로 시작 */
+
+	calc_key_flush();					/* 진입 전에 눌린 키 제거 */
+
 	while (1)
-	{	
-		if (sec_count >= 60) {
+	{
+		char input = 0;
+
+		if (sec_count >= 60) {			/* 60초 미입력: 시계 모드로 복귀 */
 			mode = 0;
 			sec_count = 0;
 			break;
 		}
-		// 0번 버튼 누르면 초기화
+
+		// 0번 버튼: 수식 전체 지우기
 		if (get_button(BUTTON0,BUTTON0PIN))
 		{
 			lcd_clear();
-			key_data =0;
-			str_len=0;
-			str[0]='\0';
+			str_len = 0;
+			str[0] = '\0';
+			showing_result = 0;
 			sec_count = 0;
 			continue;
 		}
-		// 1번 버튼 누르면 한글자 지우기
+
+		// 1번 버튼: 한 글자 지우기
 		if (get_button(BUTTON1,BUTTON1PIN))
 		{
 			sec_count = 0;
-			if (str_len > 0 && str_len <16)
+			if (showing_result)			/* 결과 화면에서는 수식을 다시 보여 줌 */
 			{
-				str_len--;
-				str[str_len] = '\0';
-				lcd_clear();
-				lcd_string(str);
-				lcd_goto_xy(0,str_len);
-				
-				continue;
+				showing_result = 0;
+				calc_redraw(str, str_len);
 			}
-			else if (str_len >=16)
+			else if (str_len > 0)
 			{
-				str_len--;
-				str[str_len] = '\0';
-				lcd_clear();
-				lcd_string(str);
-				lcd_goto_xy(1,str_len);
-				continue;
+				str[--str_len] = '\0';
+				calc_redraw(str, str_len);
 			}
-			
-		}
-		
-		// 2번 버튼 누르면 여는 괄호
-		if(get_button(BUTTON2,BUTTON2PIN))
-		{
-			str[str_len++] = '(';
-			lcd_display_data('(');
-			while(get_button(BUTTON2,BUTTON2PIN));
-			_delay_ms(30);
-			sec_count = 0;
 			continue;
 		}
-		
-		// 1번 버튼 누르면 닫는 괄호
-		else if(get_button(BUTTON3,BUTTON3PIN))
+
+		// 2번 / 3번 버튼: 여는 / 닫는 괄호 (키패드에 괄호가 없어 버튼에 배정)
+		// get_button()은 눌린 순간 한 번만 1을 반환하므로 뗄 때까지 기다릴 필요가 없다.
+		if (get_button(BUTTON2,BUTTON2PIN))
+			input = '(';
+		else if (get_button(BUTTON3,BUTTON3PIN))
+			input = ')';
+		else
+			input = (char)calc_key_pop();	/* ISR 큐에서 한 번만 꺼내 지역 변수로 사용 */
+
+		if (input == 0)
+			continue;
+
+		sec_count = 0;
+
+		if (input == '=')
 		{
-			str[str_len++] = ')';
-			lcd_display_data(')');
-			while(get_button(BUTTON3,BUTTON3PIN));
-			_delay_ms(30);
-			sec_count = 0;
+			calc_show_result(str);
+			showing_result = 1;
 			continue;
 		}
-		
-		else if ( key_data != 0 && last_key != key_data)
+
+		if (showing_result)				/* 결과가 떠 있는 상태에서 새 입력: 새 수식 시작 */
 		{
-			last_key = key_data;
-			
-			if (key_data == '=')
-			{
-				str[str_len] = '\0'; // 배열 끝
-				
-				dtostrf(calculation(str), 0, 2, result); // 결과 배열에 넣기
-				
-				lcd_clear();
-				lcd_goto_xy(0,0);
-				lcd_string(result); // 배열 출력
-				
-				str_len = 0;
-			}
-			else
-			{
-				if (str_len < 16)
-				{
-					str[str_len++] = key_data;
-					lcd_display_data(key_data);
-				}
-				else if(str_len == 16)
-				{
-					lcd_goto_xy(1,0);
-					str[str_len++] = key_data;
-					lcd_display_data(key_data);
-					
-				}
-				else if (str_len > 16)
-				{
-					str[str_len++] = key_data;
-					lcd_display_data(key_data);
-					
-				}
-			}
-			sec_count = 0;
+			showing_result = 0;
+			str_len = 0;
+			str[0] = '\0';
+			lcd_clear();
 		}
-		if (key_data == 0)
-		{
-			last_key = 0;
-		}
+
+		calc_append(str, &str_len, input);
 	}
 	return 0;
 }

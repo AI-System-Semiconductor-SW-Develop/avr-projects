@@ -1,4 +1,4 @@
-/*
+﻿/*
  * pwm.c
  *  - 방향 비트는 PORTF 하위 니블(PF0~PF3)만 갱신한다.
  *    상위 니블(FND2 자릿수)은 1ms FND 인터럽트가 사용하므로,
@@ -85,7 +85,7 @@ void turn_right(int speed)
 
 void stop(void)
 {
-    set_direction(0x0F);          /* 모든 IN = 1 : 브레이크 */
+    set_direction(0x0F);          /* 모든 IN = 1. PWM(EN)이 0이므로 L298N 계열에서는 브레이크가 아닌 자유 정지 */
     OCR1A = OCR1B = 0;
     fnd_set_state(DRIVE_STOP);
 }

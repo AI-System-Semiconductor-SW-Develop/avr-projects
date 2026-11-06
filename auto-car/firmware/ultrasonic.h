@@ -35,7 +35,10 @@
 #define SENSOR_CENTER  2
 #define SENSOR_RIGHT   3
 
-#define TIMEOUT_COUNT  7500
+/* Timer3: 64분주, 1카운트 = 4us */
+#define RISE_TIMEOUT_COUNT  1250    /* Trigger 후 Echo 상승 대기 5ms (HC-SR04는 보통 0.5ms 이내) */
+#define ECHO_TIMEOUT_COUNT  7500    /* Echo High 유지 한계 30ms (약 517cm) */
+#define DIST_FAR_CM         400     /* 범위 밖(멀다)으로 처리할 거리 값 */
 
 extern volatile uint16_t left_distance;
 extern volatile uint16_t center_distance;

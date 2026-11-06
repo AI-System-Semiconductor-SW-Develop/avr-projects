@@ -7,6 +7,7 @@
 
 #include "fnd.h"
 #include <avr/interrupt.h>
+#include <util/atomic.h>
 
 
 #define BLANK  0xff
@@ -173,53 +174,61 @@ void fnd_processing(void)
     uint16_t minute;
     uint8_t second;
     uint16_t value = 0;
+    uint16_t seconds;
+    uint8_t buf[8];          /* 지역 버퍼에서 완성한 뒤 한 번에 복사 (ISR이 빈 화면을 출력하지 않도록) */
+
+    /* drive_seconds는 1ms ISR이 갱신하는 16비트 값 → 두 바이트를 한 번에 읽는다 */
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+    {
+        seconds = drive_seconds;
+    }
 
     for (uint8_t i = 0; i < 8; i++)
-        fnd_buffer[i] = BLANK;
+        buf[i] = BLANK;
 
     /* 주행 중 */
     if (!drive_finished)
     {
-        minute = drive_seconds / 60;
-        second = drive_seconds % 60;
+        minute = seconds / 60;
+        second = seconds % 60;
 
         if (minute > 99)
             minute = 99;
 
         /* 앞 4자리: MMSS */
-        fnd_buffer[0] = fnd_font[minute / 10];
-        fnd_buffer[1] = fnd_font[minute % 10];
-        fnd_buffer[2] = fnd_font[second / 10];
-        fnd_buffer[3] = fnd_font[second % 10];
+        buf[0] = fnd_font[minute / 10];
+        buf[1] = fnd_font[minute % 10];
+        buf[2] = fnd_font[second / 10];
+        buf[3] = fnd_font[second % 10];
 
         switch (current_state)
         {
         case DRIVE_FORWARD:
-            fnd_buffer[4] = FONT_F;
-            fnd_buffer[5 + animation_position] = DASH;
+            buf[4] = FONT_F;
+            buf[5 + animation_position] = DASH;
             break;
 
         case DRIVE_BACKWARD:
-            fnd_buffer[4] = FONT_B;
-            fnd_buffer[7 - animation_position] = DASH;
+            buf[4] = FONT_B;
+            buf[7 - animation_position] = DASH;
             break;
 
         case DRIVE_LEFT:
-            fnd_buffer[4] = FONT_L;
-            fnd_buffer[7 - animation_position] = DASH;
+            buf[4] = FONT_L;
+            buf[7 - animation_position] = DASH;
             break;
 
         case DRIVE_RIGHT:
-            fnd_buffer[4] = FONT_R;
-            fnd_buffer[5 + animation_position] = DASH;
+            buf[4] = FONT_R;
+            buf[5 + animation_position] = DASH;
             break;
 
         case DRIVE_STOP:
         default:
-            fnd_buffer[4] = FONT_S;
-            fnd_buffer[5] = FONT_T;
-            fnd_buffer[6] = FONT_O;
-            fnd_buffer[7] = FONT_P;
+            buf[4] = FONT_S;
+            buf[5] = FONT_T;
+            buf[6] = FONT_O;
+            buf[7] = FONT_P;
             break;
         }
     }
@@ -230,32 +239,32 @@ void fnd_processing(void)
         switch (result_page)
         {
         case 0:     // 주행시간
-            minute = drive_seconds / 60;
-            second = drive_seconds % 60;
+            minute = seconds / 60;
+            second = seconds % 60;
 
             if (minute > 99)
                 minute = 99;
 
-            fnd_buffer[0] = FONT_T;
+            buf[0] = FONT_T;
 
-            fnd_buffer[4] = fnd_font[minute / 10];
-            fnd_buffer[5] = fnd_font[minute % 10];
-            fnd_buffer[6] = fnd_font[second / 10];
-            fnd_buffer[7] = fnd_font[second % 10];
+            buf[4] = fnd_font[minute / 10];
+            buf[5] = fnd_font[minute % 10];
+            buf[6] = fnd_font[second / 10];
+            buf[7] = fnd_font[second % 10];
             break;
 
         case 1:     // 후진 횟수
-            fnd_buffer[0] = FONT_B;
+            buf[0] = FONT_B;
             value = backward_count;
             break;
 
         case 2:     // 좌회전 횟수
-            fnd_buffer[0] = FONT_L;
+            buf[0] = FONT_L;
             value = left_count;
             break;
 
         case 3:     // 우회전 횟수
-            fnd_buffer[0] = FONT_R;
+            buf[0] = FONT_R;
             value = right_count;
             break;
         }
@@ -265,10 +274,14 @@ void fnd_processing(void)
             if (value > 9999)
                 value = 9999;
 
-            fnd_buffer[4] = fnd_font[value / 1000];
-            fnd_buffer[5] = fnd_font[value / 100 % 10];
-            fnd_buffer[6] = fnd_font[value / 10 % 10];
-            fnd_buffer[7] = fnd_font[value % 10];
+            buf[4] = fnd_font[value / 1000];
+            buf[5] = fnd_font[value / 100 % 10];
+            buf[6] = fnd_font[value / 10 % 10];
+            buf[7] = fnd_font[value % 10];
         }
     }
+
+    /* 완성된 화면을 표시 버퍼로 복사 (바이트 단위 쓰기는 원자적) */
+    for (uint8_t i = 0; i < 8; i++)
+        fnd_buffer[i] = buf[i];
 }

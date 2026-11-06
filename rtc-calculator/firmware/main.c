@@ -1,4 +1,4 @@
-/*
+﻿/*
  * 05.ULTRASONIC.c
  *
  * Created: 2026-06-15 오전 11:36:36
@@ -19,6 +19,7 @@ extern void init_lcd(void);
 extern void init_button(void);
 extern void init_keypad (void);
 extern uint8_t lcd_cal (void);
+extern void calc_key_push(uint8_t key);
 extern void UART0_transmit(void);
 extern void i2c_clock(int *mode,int *time, char* line);
 extern uint8_t get_button(int button_num, int button_pin);
@@ -68,6 +69,10 @@ ISR(TIMER0_OVF_vect)
 
 		temp = scan_keypad();
 		key_data = temp;
+
+		/* 계산기 모드: 키를 큐에 보관 (메인이 바쁜 동안 덮이지 않도록) */
+		if (mode == 4 && temp != 0)
+			calc_key_push(temp);
 
 		/* 설정 화면 입력은 처리할 때까지 보관 */
 		if ((mode == 2 || mode == 3) &&

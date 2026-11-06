@@ -1,4 +1,4 @@
-/*
+﻿/*
  * main.c  -  06.AUTO_CAR
  *
  *  - 수동 모드 : 블루투스 명령(F/B/L/R/S)으로 조종, E=주행종료
@@ -22,17 +22,26 @@ FILE OUTPUT = FDEV_SETUP_STREAM(uart0_putchar, NULL, _FDEV_SETUP_WRITE);
 
 static uint8_t mode = MANUAL_MODE;
 
+static void execute_command(uint8_t command);
 
-/* 블루투스 수동 조종 */
+
+/* 블루투스 수동 조종: 큐에 쌓인 명령을 들어온 순서대로 모두 처리 */
 static void manual_step(void)
 {
-    uint8_t command = bt_data;
+    uint8_t command;
 
-    if (command == 0)
-        return;
+    while ((command = bt_read()) != 0)
+    {
+        UART0_transmit(command);     /* 확인용 에코 (ISR이 아닌 메인에서) */
+        execute_command(command);
 
-    bt_data = 0;
+        if (drive_finished)          /* E 처리 후 남은 명령은 버림 */
+            break;
+    }
+}
 
+static void execute_command(uint8_t command)
+{
     switch (command)
     {
     case 'F': case 'f': forward(500);  break;
@@ -41,7 +50,7 @@ static void manual_step(void)
     case 'R': case 'r': turn_right(700); break;
     case 'S': case 's': stop();        break;
     case 'E': case 'e': stop(); fnd_set_state(DRIVE_END); break;
-    default: break;
+    default: break;          /* \r, \n 등 그 외 문자는 무시 */
     }
 }
 
@@ -50,6 +59,8 @@ static void manual_step(void)
 static void auto_step(void)
 {
     read_all_sensor();
+
+    /* 0 = 센서 실패(Echo 없음), DIST_FAR_CM = 범위 밖(멀다) */
 
     /* 중앙 센서 측정 실패 -> 안전 정지 */
     if (center_distance == 0)
@@ -111,6 +122,7 @@ int main(void)
             {
                 mode = (mode == MANUAL_MODE) ? AUTO_MODE : MANUAL_MODE;
                 stop();
+                bt_flush();                   /* 자동 모드 중 쌓인 명령이 전환 직후 실행되지 않도록 */
             }
         }
 

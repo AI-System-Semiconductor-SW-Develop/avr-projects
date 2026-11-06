@@ -14,7 +14,10 @@
 #include <avr/interrupt.h>
 #include <string.h>
 
-extern volatile uint8_t bt_data;
+extern volatile uint8_t bt_rx_overflow;
+
+uint8_t bt_read(void);
+void bt_flush(void);
 
 void init_uart1(void);
 void UART1_transmit(uint8_t data);
